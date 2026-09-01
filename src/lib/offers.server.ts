@@ -95,12 +95,25 @@ export function mapOfferRow(r: Record<string, unknown>): OfferRow {
   };
 }
 
-/** True when the offer used up its allowed number of UNIQUE customers. */
+/**
+ * True when the offer used up its allowed limit.
+ *
+ * `max_redemptions` is a HARD limit and it is judged on BOTH counters:
+ *   - unique customers who benefited (beneficiaries), and
+ *   - the total number of times the offer was used (uses),
+ * each including the seats already taken by orders whose payment is not
+ * confirmed yet (the discount is already pinned on those orders).
+ *
+ * Once the limit is reached the offer is finished, even if its time window is
+ * still open.
+ */
 export function isSoldOut(o: OfferRow): boolean {
-  return (
-    o.max_redemptions != null && o.max_redemptions > 0 && o.beneficiary_count >= o.max_redemptions
-  );
+  if (o.max_redemptions == null || o.max_redemptions <= 0) return false;
+  const beneficiaries = o.beneficiary_count + (o.pending_beneficiary_count ?? 0);
+  const uses = o.redemption_count + (o.pending_use_count ?? 0);
+  return beneficiaries >= o.max_redemptions || uses >= o.max_redemptions;
 }
+
 
 /**
  * True when this exact customer can still benefit. With "once per customer" a
