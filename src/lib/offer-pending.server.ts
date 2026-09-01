@@ -24,6 +24,8 @@ export interface PendingOfferUse {
   customer_key: string;
   order_total: number | null;
   created_at: string;
+  /** True when this same customer already has a CONFIRMED redemption. */
+  already_confirmed: boolean;
 }
 
 export interface PendingOfferUsage {
@@ -76,6 +78,7 @@ export async function loadPendingOfferUsage(
         customer_key: customerKeyOf(order),
         order_total: num(order.total_price),
         created_at: String(order.created_at ?? new Date().toISOString()),
+        already_confirmed: false,
       };
       for (const offerId of new Set(applied)) {
         if (!wanted.has(offerId)) continue;
@@ -85,9 +88,27 @@ export async function loadPendingOfferUsage(
       }
     }
 
-    for (const entry of out.values()) {
+    // A customer who already has a confirmed redemption is not a NEW seat, so
+    // they are never counted twice against the offer limit.
+    const { data: reds } = await admin
+      .from("offer_redemptions")
+      .select("offer_id, customer_key, order_id")
+      .in("offer_id", [...out.keys()]);
+    const confirmed = new Map<string, Set<string>>();
+    for (const r of ((reds ?? []) as any[])) {
+      const key = String(r.offer_id);
+      const set = confirmed.get(key) ?? new Set<string>();
+      set.add(String(r.customer_key ?? r.order_id));
+      confirmed.set(key, set);
+    }
+
+    for (const [offerId, entry] of out) {
+      const paid = confirmed.get(offerId) ?? new Set<string>();
+      for (const row of entry.rows) row.already_confirmed = paid.has(row.customer_key);
       entry.uses = entry.rows.length;
-      entry.beneficiaries = new Set(entry.rows.map((r) => r.customer_key)).size;
+      entry.beneficiaries = new Set(
+        entry.rows.filter((r) => !r.already_confirmed).map((r) => r.customer_key),
+      ).size;
     }
   } catch {
     return out;
