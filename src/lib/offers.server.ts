@@ -89,6 +89,8 @@ export function mapOfferRow(r: Record<string, unknown>): OfferRow {
     max_redemptions: r.max_redemptions == null ? null : num(r.max_redemptions),
     redemption_count: num(r.redemption_count),
     beneficiary_count: r.beneficiary_count == null ? num(r.redemption_count) : num(r.beneficiary_count),
+    pending_beneficiary_count: num(r.pending_beneficiary_count),
+    pending_use_count: num(r.pending_use_count),
     usage_limit_type: r.usage_limit_type === "once_per_customer" ? "once_per_customer" : "per_order",
     starts_at: String(r.starts_at ?? new Date().toISOString()),
     ends_at: (r.ends_at as string | null) ?? null,
