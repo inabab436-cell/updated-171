@@ -210,6 +210,18 @@ export async function loadOffers(
       .eq("user_id", userId);
     const rows = ((data ?? []) as Record<string, unknown>[]).map(mapOfferRow);
 
+    // Seats already taken by unconfirmed orders count against the limit, so a
+    // limited offer stops being offered the moment it fills up.
+    if (rows.length) {
+      const { loadPendingOfferUsage } = await import("@/lib/offer-pending.server");
+      const pending = await loadPendingOfferUsage(admin, rows.map((r) => r.id));
+      for (const row of rows) {
+        const p = pending.get(row.id);
+        row.pending_beneficiary_count = p?.beneficiaries ?? 0;
+        row.pending_use_count = p?.uses ?? 0;
+      }
+    }
+
     // "Once per customer": drop the offers this exact customer already used.
     const keys = (Array.isArray(customerKey) ? customerKey : [customerKey])
       .map((k) => (k ? String(k).trim() : ""))
