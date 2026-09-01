@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BadgePercent, Clock, Info, Loader2, Plus, Repeat, Trash2, Users } from "lucide-react";
+import {
+  BadgePercent,
+  Clock,
+  Hourglass,
+  Info,
+  Loader2,
+  Plus,
+  Repeat,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { PageShell } from "@/components/dashboard/page-shell";
@@ -198,18 +208,44 @@ function LiveTimeScreen({ offer, now }: { offer: OfferDTO; now: number }) {
   );
 }
 
-/** Live screen: number of customers who benefited, refreshed continuously. */
+/** Confirmed beneficiaries (payment confirmed). */
 function LiveCustomersScreen({ offer }: { offer: OfferDTO }) {
   const count = offer.beneficiaries.length || offer.redemption_count;
   return (
     <div className="flex-1 rounded-xl border border-border/60 bg-muted/40 p-3">
       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <Users className="h-3.5 w-3.5" />
-        المستفيدون الآن
+        مستفيدون مؤكدون
       </div>
       <div dir="ltr" className="mt-1 text-lg font-semibold tabular-nums">
         {count}
         {offer.max_redemptions ? ` / ${offer.max_redemptions}` : ""}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Seats already taken by orders whose payment is not confirmed yet. The
+ * discount is pinned on those orders, so they count against the offer limit.
+ */
+function PendingCustomersScreen({ offer }: { offer: OfferDTO }) {
+  const confirmed = offer.beneficiaries.length || offer.redemption_count;
+  const remaining =
+    offer.max_redemptions != null
+      ? Math.max(0, offer.max_redemptions - confirmed - offer.pending_beneficiaries)
+      : null;
+  return (
+    <div className="flex-1 rounded-xl border border-border/60 bg-muted/40 p-3">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <Hourglass className="h-3.5 w-3.5" />
+        بانتظار تأكيد الدفع
+      </div>
+      <div dir="ltr" className="mt-1 text-lg font-semibold tabular-nums">
+        {offer.pending_beneficiaries}
+      </div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground">
+        {remaining == null ? "العدد غير محدود" : `المتبقي من العدد: ${remaining}`}
       </div>
     </div>
   );
@@ -228,7 +264,11 @@ function LiveUsesScreen({ offer }: { offer: OfferDTO }) {
         مرات الاستخدام
       </div>
       <div dir="ltr" className="mt-1 text-lg font-semibold tabular-nums">
-        {offer.use_count}
+        {offer.use_count + offer.pending_uses}
+        {offer.max_redemptions ? ` / ${offer.max_redemptions}` : ""}
+      </div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground">
+        {`مؤكد ${offer.use_count} · غير مؤكد ${offer.pending_uses}`}
       </div>
     </div>
   );
@@ -665,9 +705,10 @@ function OffersPage() {
                   </div>
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <LiveTimeScreen offer={o} now={now} />
                   <LiveCustomersScreen offer={o} />
+                  <PendingCustomersScreen offer={o} />
                   <LiveUsesScreen offer={o} />
                 </div>
 
@@ -677,8 +718,8 @@ function OffersPage() {
                   تأكيد الدفع بعد. أما العميل الذي لم يُنشأ له أوردر قبل انتهاء العرض
                   فلا يحصل على الخصم.
                   {o.max_redemptions
-                    ? " ولا يُحتسب العميل من عدد المستفيدين إلا بعد تأكيد دفع أوردره، فالأوردر غير المدفوع لا يحجز مكاناً من العدد، وبمجرد اكتمال العدد يتوقف تطبيق العرض على أي عميل جديد."
-                    : " ويُحتسب العميل ضمن المستفيدين بعد تأكيد دفع أوردره فقط."}
+                    ? " وأي أوردر أُنشئ بالخصم يحجز مكاناً من العدد فوراً حتى قبل تأكيد الدفع، وبمجرد اكتمال العدد أو اكتمال مرات الاستفادة يُعتبر العرض منتهياً ويتوقف تطبيقه على أي عميل جديد حتى لو كان وقته لم ينتهِ بعد."
+                    : " ويُحتسب العميل ضمن المستفيدين المؤكدين بعد تأكيد دفع أوردره، ويظهر قبل ذلك في خانة «بانتظار تأكيد الدفع»."}
                   {" سعر الشحن يُحسب مرة واحدة لكل أوردر، فأي إضافة على نفس الأوردر تُحسب بقيمة المنتجات بعد الخصم بدون شحن جديد."}
                 </p>
 
@@ -689,7 +730,7 @@ function OffersPage() {
                   </div>
                   {o.beneficiaries.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
-                      لم يستفد أي عميل بعد. يُحتسب العميل بعد تأكيد دفع طلبه فقط.
+                      لا يوجد مستفيد مؤكد بعد. يُحتسب العميل هنا بعد تأكيد دفع طلبه.
                     </p>
                   ) : (
                     <ul className="space-y-1">
@@ -714,6 +755,47 @@ function OffersPage() {
                           </li>
                         ),
                       )}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-semibold text-muted-foreground">
+                    مستفيدون بانتظار تأكيد الدفع
+                  </div>
+                  {o.pending.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      لا يوجد أوردر بالخصم في انتظار تأكيد الدفع.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {o.pending.map((b) => {
+                        const body = (
+                          <>
+                            {b.customer_name?.trim() || "عميل"} — أوردر بالخصم بقيمة{" "}
+                            {b.order_total ?? 0} · بانتظار تأكيد الدفع
+                            {b.already_confirmed ? " (استفاد قبل ذلك بأوردر مؤكد)" : ""}
+                          </>
+                        );
+                        return b.conversation_id ? (
+                          <li key={b.order_id}>
+                            <Link
+                              to="/conversation/$id"
+                              params={{ id: b.conversation_id }}
+                              className="block rounded-lg border border-dashed border-border/60 px-3 py-2 text-xs hover:bg-muted/60"
+                            >
+                              {body}
+                            </Link>
+                          </li>
+                        ) : (
+                          <li
+                            key={b.order_id}
+                            className="rounded-lg border border-dashed border-border/60 px-3 py-2 text-xs"
+                          >
+                            {body}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </div>

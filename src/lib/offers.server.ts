@@ -40,6 +40,10 @@ export interface OfferRow {
   redemption_count: number;
   /** Unique customers who benefited — this is what max_redemptions limits. */
   beneficiary_count: number;
+  /** Unique customers holding the discount on an unconfirmed order. */
+  pending_beneficiary_count?: number;
+  /** Unconfirmed orders carrying the discount. */
+  pending_use_count?: number;
   /** Once per customer, or on every order. */
   usage_limit_type: UsageLimitType;
   starts_at: string;
@@ -85,6 +89,8 @@ export function mapOfferRow(r: Record<string, unknown>): OfferRow {
     max_redemptions: r.max_redemptions == null ? null : num(r.max_redemptions),
     redemption_count: num(r.redemption_count),
     beneficiary_count: r.beneficiary_count == null ? num(r.redemption_count) : num(r.beneficiary_count),
+    pending_beneficiary_count: num(r.pending_beneficiary_count),
+    pending_use_count: num(r.pending_use_count),
     usage_limit_type: r.usage_limit_type === "once_per_customer" ? "once_per_customer" : "per_order",
     starts_at: String(r.starts_at ?? new Date().toISOString()),
     ends_at: (r.ends_at as string | null) ?? null,
@@ -95,12 +101,25 @@ export function mapOfferRow(r: Record<string, unknown>): OfferRow {
   };
 }
 
-/** True when the offer used up its allowed number of UNIQUE customers. */
+/**
+ * True when the offer used up its allowed limit.
+ *
+ * `max_redemptions` is a HARD limit and it is judged on BOTH counters:
+ *   - unique customers who benefited (beneficiaries), and
+ *   - the total number of times the offer was used (uses),
+ * each including the seats already taken by orders whose payment is not
+ * confirmed yet (the discount is already pinned on those orders).
+ *
+ * Once the limit is reached the offer is finished, even if its time window is
+ * still open.
+ */
 export function isSoldOut(o: OfferRow): boolean {
-  return (
-    o.max_redemptions != null && o.max_redemptions > 0 && o.beneficiary_count >= o.max_redemptions
-  );
+  if (o.max_redemptions == null || o.max_redemptions <= 0) return false;
+  const beneficiaries = o.beneficiary_count + (o.pending_beneficiary_count ?? 0);
+  const uses = o.redemption_count + (o.pending_use_count ?? 0);
+  return beneficiaries >= o.max_redemptions || uses >= o.max_redemptions;
 }
+
 
 /**
  * True when this exact customer can still benefit. With "once per customer" a
@@ -192,6 +211,18 @@ export async function loadOffers(
       )
       .eq("user_id", userId);
     const rows = ((data ?? []) as Record<string, unknown>[]).map(mapOfferRow);
+
+    // Seats already taken by unconfirmed orders count against the limit, so a
+    // limited offer stops being offered the moment it fills up.
+    if (rows.length) {
+      const { loadPendingOfferUsage } = await import("@/lib/offer-pending.server");
+      const pending = await loadPendingOfferUsage(admin, rows.map((r) => r.id));
+      for (const row of rows) {
+        const p = pending.get(row.id);
+        row.pending_beneficiary_count = p?.beneficiaries ?? 0;
+        row.pending_use_count = p?.uses ?? 0;
+      }
+    }
 
     // "Once per customer": drop the offers this exact customer already used.
     const keys = (Array.isArray(customerKey) ? customerKey : [customerKey])
