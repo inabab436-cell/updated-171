@@ -24,6 +24,17 @@ export interface OfferBeneficiary {
   uses: number;
 }
 
+/** A customer whose discount is pinned on an order awaiting payment confirmation. */
+export interface OfferPendingBeneficiary {
+  order_id: string;
+  conversation_id: string | null;
+  customer_name: string | null;
+  order_total: number | null;
+  created_at: string;
+  /** True when the same customer already has a confirmed use of this offer. */
+  already_confirmed: boolean;
+}
+
 export interface OfferDTO extends OfferRow {
   /** Resolved product name for product-scoped offers. */
   product_name: string | null;
@@ -33,6 +44,12 @@ export interface OfferDTO extends OfferRow {
   beneficiaries: OfferBeneficiary[];
   /** Total number of times the offer was used (all customers). */
   use_count: number;
+  /** Customers holding the discount on an order not confirmed yet. */
+  pending: OfferPendingBeneficiary[];
+  /** New customers awaiting payment confirmation (count against the limit). */
+  pending_beneficiaries: number;
+  /** Unconfirmed orders carrying the discount. */
+  pending_uses: number;
 }
 
 export interface OfferInput {
@@ -59,6 +76,7 @@ export const listOffers = createServerFn({ method: "GET" }).handler(
     const { requireUserId } = await import("@/lib/session-guard.server");
     const { getSupabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { mapOfferRow, isLive, hasEnded } = await import("@/lib/offers.server");
+    const { loadPendingOfferUsage } = await import("@/lib/offer-pending.server");
     const { userId } = await requireUserId();
     const admin = getSupabaseAdmin();
 
@@ -112,14 +130,38 @@ export const listOffers = createServerFn({ method: "GET" }).handler(
       }
     }
 
+    // Pending seats: the discount is already pinned on those orders, so they
+    // count against the offer limit even before the payment is confirmed.
+    const pendingByOffer = rows.length
+      ? await loadPendingOfferUsage(admin, rows.map((r) => r.id))
+      : new Map();
+    for (const o of rows) {
+      const p = pendingByOffer.get(o.id);
+      o.pending_beneficiary_count = p?.beneficiaries ?? 0;
+      o.pending_use_count = p?.uses ?? 0;
+    }
+
     const now = Date.now();
-    return rows.map((o) => ({
-      ...o,
-      product_name: o.product_id ? names.get(o.product_id) ?? null : null,
-      state: isLive(o, now) ? "live" : hasEnded(o, now) ? "ended" : "scheduled",
-      beneficiaries: byOffer.get(o.id) ?? [],
-      use_count: usesByOffer.get(o.id) ?? o.redemption_count,
-    }));
+    return rows.map((o) => {
+      const p = pendingByOffer.get(o.id);
+      return {
+        ...o,
+        product_name: o.product_id ? names.get(o.product_id) ?? null : null,
+        state: isLive(o, now) ? "live" : hasEnded(o, now) ? "ended" : "scheduled",
+        beneficiaries: byOffer.get(o.id) ?? [],
+        use_count: usesByOffer.get(o.id) ?? o.redemption_count,
+        pending: (p?.rows ?? []).map((r: any) => ({
+          order_id: r.order_id,
+          conversation_id: r.conversation_id,
+          customer_name: r.customer_name,
+          order_total: r.order_total,
+          created_at: r.created_at,
+          already_confirmed: r.already_confirmed,
+        })),
+        pending_beneficiaries: p?.beneficiaries ?? 0,
+        pending_uses: p?.uses ?? 0,
+      };
+    });
   },
 );
 
