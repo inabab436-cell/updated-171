@@ -40,6 +40,10 @@ export interface OfferRow {
   redemption_count: number;
   /** Unique customers who benefited — this is what max_redemptions limits. */
   beneficiary_count: number;
+  /** Unique customers holding the discount on an unconfirmed order. */
+  pending_beneficiary_count?: number;
+  /** Unconfirmed orders carrying the discount. */
+  pending_use_count?: number;
   /** Once per customer, or on every order. */
   usage_limit_type: UsageLimitType;
   starts_at: string;
